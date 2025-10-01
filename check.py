@@ -1,250 +1,510 @@
 #!/usr/bin/env python3
 """
-email_health_check.py
+Business Email Health Check
 
-Checks SPF, DMARC, DKIM (public keys), MX, PTR, MTA-STS, TLS-RPT, BIMI, and basic SMTP STARTTLS cert info for a domain.
-
-Dependencies:
-  pip install dnspython requests
+Checks if your business email is configured correctly.
+Written in plain English. No technical knowledge needed.
 """
 
-import argparse
+import sys
+import time
 import socket
-import ssl
 import dns.resolver
-import dns.reversename
-import dns.exception
-import requests
-import re
-from typing import List
 
-resolver = dns.resolver.Resolver()
-resolver.lifetime = 5
-resolver.timeout = 5
 
-COMMON_DKIM_SELECTORS = [
-    "default", "selector1", "s1", "google", "mail", "smtp", "selector", "k1"
-]
+class BusinessEmailChecker:
+    """Checks business email setup using plain language."""
+    
+    def __init__(self):
+        """Set up the checker."""
+        self.domain = None
+        self.can_receive_email = False
+        self.has_spam_protection = False
+        self.has_authenticity_check = False
+        self.has_encryption = False
+        self.problems = []
+        self.solutions = []
+    
+    def explain_why_this_matters(self):
+        """Explain why email configuration matters in business terms."""
+        print("""
+WHY YOUR EMAIL CONFIGURATION MATTERS
+=====================================
 
-def query_txt(domain: str):
-    try:
-        answers = resolver.resolve(domain, "TXT")
-        return [b"".join(r.strings).decode("utf-8") for r in answers]
-    except dns.exception.DNSException:
-        return []
+Poor email setup can cause:
+• Lost sales when customer emails bounce
+• Your emails landing in spam folders
+• Scammers impersonating your business
+• Sensitive information being exposed
+• Damage to your business reputation
 
-def get_spf(domain: str):
-    txts = query_txt(domain)
-    spf = [t for t in txts if t.lower().startswith("v=spf1")]
-    return spf[0] if spf else None
+This check takes about 30 seconds and will tell you:
+• If customers can reach you by email
+• If your emails look legitimate to Gmail, Outlook, etc.
+• If your email is protected from hackers
+• Exactly what to tell your IT team to fix any issues
 
-def get_dmarc(domain: str):
-    txts = query_txt("_dmarc." + domain)
-    for t in txts:
-        if t.lower().startswith("v=dmarc1"):
-            return t
-    return None
-
-def get_bimi(domain: str):
-    txts = query_txt("default._bimi." + domain)
-    for t in txts:
-        if t.lower().startswith("v=bimi1"):
-            return t
-    return None
-
-def get_tls_rpt(domain: str):
-    txts = query_txt("_smtp._tls." + domain)
-    return txts
-
-def get_mta_sts(domain: str):
-    txts = query_txt("_mta-sts." + domain)
-    # There is also a policy file at https://mta-sts.<domain>/.well-known/mta-sts.txt
-    return txts
-
-def check_dkim_selector(domain: str, selector: str):
-    q = f"{selector}._domainkey.{domain}"
-    txts = query_txt(q)
-    for t in txts:
-        if "v=DKIM1" in t or "p=" in t:
-            return t
-    return None
-
-def lookup_mx(domain: str):
-    try:
-        ans = resolver.resolve(domain, "MX")
-        mx = [(r.preference, str(r.exchange).rstrip(".")) for r in ans]
-        mx.sort()
-        return [host for _, host in mx]
-    except dns.exception.DNSException:
-        return []
-
-def resolve_host_ips(hostname: str):
-    ips = []
-    try:
-        a = resolver.resolve(hostname, "A")
-        ips += [r.address for r in a]
-    except dns.exception.DNSException:
-        pass
-    try:
-        aaaa = resolver.resolve(hostname, "AAAA")
-        ips += [r.address for r in aaaa]
-    except dns.exception.DNSException:
-        pass
-    return ips
-
-def ptr_check(ip: str):
-    try:
-        rev = dns.reversename.from_address(ip)
-        ans = resolver.resolve(rev, "PTR")
-        ptrs = [str(r).rstrip(".") for r in ans]
-        # forward confirm each ptr resolves back to ip
-        forward_ok = []
-        for p in ptrs:
-            try:
-                ips = resolve_host_ips(p)
-                forward_ok.append(ip in ips)
-            except Exception:
-                forward_ok.append(False)
-        return ptrs, forward_ok
-    except dns.exception.DNSException:
-        return [], []
-
-def smtp_starttls_check(mx_host: str, timeout=6):
-    result = {"host": mx_host, "connect": False, "ehlo": None, "starttls": False, "tls_cert": None, "error": None}
-    try:
-        # Resolve an IP to connect to
-        ips = resolve_host_ips(mx_host)
-        if not ips:
-            result["error"] = "No A/AAAA records for MX host"
-            return result
-        ip = ips[0]
-        sock = socket.create_connection((ip, 25), timeout=timeout)
-        f = sock.makefile("rb", buffering=0)
-        # read banner
-        banner = f.readline().decode(errors="ignore")
-        # send EHLO
-        sock.sendall(b"EHLO email-checker.example\r\n")
-        ehlo_lines = []
-        while True:
-            line = f.readline().decode(errors="ignore")
-            ehlo_lines.append(line.strip())
-            if re.match(r"^\d{3} ", line):
-                break
-        result["connect"] = True
-        result["ehlo"] = "\n".join(ehlo_lines)
-        # check if STARTTLS present
-        if any("STARTTLS" in l.upper() for l in ehlo_lines):
-            sock.sendall(b"STARTTLS\r\n")
-            _ = f.readline()  # response
-            context = ssl.create_default_context()
-            tls = context.wrap_socket(sock, server_hostname=mx_host)
-            cert = tls.getpeercert()
-            result["starttls"] = True
-            result["tls_cert"] = cert
-            try:
-                tls.close()
-            except Exception:
-                pass
-        else:
+Let's begin...
+        """)
+        time.sleep(3)
+    
+    def check_if_email_works(self):
+        """Check if the domain can receive email."""
+        print("\n1. Can customers send you email?")
+        print("   Checking...", end="", flush=True)
+        
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            answers = resolver.resolve(self.domain, "MX")
+            
+            if answers:
+                print(" YES")
+                print("   Your email is delivered to:", str(answers[0].exchange).rstrip("."))
+                self.can_receive_email = True
+                return True
+        except:
+            pass
+        
+        print(" NO - CRITICAL PROBLEM")
+        print("   Customer emails to your domain will bounce back.")
+        self.problems.append(
+            "Your domain cannot receive email. All incoming emails will fail."
+        )
+        self.solutions.append(
+            "Ask your email provider to set up MX records for your domain."
+        )
+        return False
+    
+    def check_spam_protection(self):
+        """Check if spam protection is configured."""
+        print("\n2. Are you protected from email spoofing?")
+        print("   Checking...", end="", flush=True)
+        
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            answers = resolver.resolve(self.domain, "TXT")
+            
+            for record in answers:
+                text = b"".join(record.strings).decode("utf-8", errors="ignore")
+                if text.lower().startswith("v=spf1"):
+                    print(" YES")
+                    print("   Spoof protection is active.")
+                    self.has_spam_protection = True
+                    return True
+        except:
+            pass
+        
+        print(" NO - SECURITY RISK")
+        print("   Anyone can send emails pretending to be from your company.")
+        self.problems.append(
+            "No protection against email spoofing. Scammers can impersonate you."
+        )
+        self.solutions.append(
+            "Add an SPF record. Tell your IT team: 'We need an SPF TXT record in our DNS.'"
+        )
+        return False
+    
+    def check_authenticity(self):
+        """Check if email authenticity verification is set up."""
+        print("\n3. Will email providers trust your emails?")
+        print("   Checking...", end="", flush=True)
+        
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            dmarc_domain = f"_dmarc.{self.domain}"
+            answers = resolver.resolve(dmarc_domain, "TXT")
+            
+            for record in answers:
+                text = b"".join(record.strings).decode("utf-8", errors="ignore")
+                if text.lower().startswith("v=dmarc1"):
+                    print(" YES")
+                    
+                    # Explain the policy in business terms
+                    if "p=reject" in text.lower():
+                        print("   Strong protection: Fake emails are blocked.")
+                    elif "p=quarantine" in text.lower():
+                        print("   Moderate protection: Suspicious emails go to spam.")
+                    else:
+                        print("   Basic monitoring: You track fake emails but don't block them yet.")
+                    
+                    self.has_authenticity_check = True
+                    return True
+        except:
+            pass
+        
+        print(" PARTIALLY")
+        print("   Gmail and Outlook may mark your emails as suspicious.")
+        self.problems.append(
+            "Missing email authentication. Your emails might go to spam folders."
+        )
+        self.solutions.append(
+            "Add a DMARC policy. Tell your IT team: 'Set up DMARC starting with p=none.'"
+        )
+        return False
+    
+    def check_encryption(self):
+        """Check if email is encrypted during delivery."""
+        print("\n4. Is your email encrypted during delivery?")
+        print("   Checking...", end="", flush=True)
+        
+        if not self.can_receive_email:
+            print(" SKIPPED")
+            print("   (No email server to test)")
+            return False
+        
+        try:
+            # Get mail server address
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            answers = resolver.resolve(self.domain, "MX")
+            mx_host = str(answers[0].exchange).rstrip(".")
+            
+            # Test connection
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((mx_host, 25))
+            
+            # Get greeting
+            greeting = sock.recv(1024)
+            
+            # Say hello
+            sock.send(b"EHLO test.example.com\r\n")
+            
+            # Check response
+            response = b""
+            for _ in range(10):
+                chunk = sock.recv(1024)
+                response += chunk
+                if b"250 " in chunk:
+                    break
+            
             sock.close()
-    except Exception as e:
-        result["error"] = str(e)
-    return result
-
-def fetch_mta_sts_policy(domain: str):
-    url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
-    try:
-        r = requests.get(url, timeout=5)
-        if r.status_code == 200:
-            return r.text
-        return None
-    except Exception:
-        return None
-
-def expand_spf_includes(spf: str):
-    # naive: extract "include:domain" tokens
-    includes = re.findall(r"include:([^\s]+)", spf or "")
-    return includes
-
-def main(domain: str, dkim_selectors: List[str]):
-    out = {"domain": domain}
-    out["spf"] = get_spf(domain)
-    out["spf_includes"] = expand_spf_includes(out["spf"])
-    out["dmarc"] = get_dmarc(domain)
-    out["bimi"] = get_bimi(domain)
-    out["tls_rpt"] = get_tls_rpt(domain)
-    out["mta_sts_txt"] = get_mta_sts(domain)
-    out["mta_sts_policy_url"] = fetch_mta_sts_policy(domain)
-    mxs = lookup_mx(domain)
-    out["mx_hosts"] = []
-    for mx in mxs:
-        mxinfo = {"host": mx}
-        ips = resolve_host_ips(mx)
-        mxinfo["ips"] = ips
-        # PTRs for each ip
-        mxinfo["ptrs"] = {}
-        for ip in ips:
-            ptrs, forward_ok = ptr_check(ip)
-            mxinfo["ptrs"][ip] = {"ptrs": ptrs, "forward_confirm": forward_ok}
-        # smtp check
-        mxinfo["smtp_check"] = smtp_starttls_check(mx)
-        out["mx_hosts"].append(mxinfo)
-    # DKIM checks
-    out["dkim"] = {}
-    selectors_to_try = dkim_selectors or COMMON_DKIM_SELECTORS
-    for sel in selectors_to_try:
-        k = check_dkim_selector(domain, sel)
-        out["dkim"][sel] = bool(k)
-    # print summary
-    print("\nEMAIL HEALTH CHECK for", domain)
-    print("="*60)
-    print("SPF:", out["spf"] or "MISSING")
-    if out["spf_includes"]:
-        print(" SPF includes:", ", ".join(out["spf_includes"]))
-    print("DMARC:", out["dmarc"] or "MISSING")
-    print("BIMI:", out["bimi"] or "MISSING")
-    print("TLS-RPT TXT:", out["tls_rpt"] or "MISSING")
-    print("MTA-STS TXT:", out["mta_sts_txt"] or "MISSING")
-    print("MTA-STS policy (https):", "FOUND" if out["mta_sts_policy_url"] else "MISSING")
-    print("\nMX Checks:")
-    if not out["mx_hosts"]:
-        print(" No MX records found")
-    for m in out["mx_hosts"]:
-        print("- MX host:", m["host"])
-        print("  IPs:", ", ".join(m["ips"]) if m["ips"] else "none")
-        for ip, info in m["ptrs"].items():
-            print(f"   PTR {ip} -> {info['ptrs']} forward-confirm:", info["forward_confirm"])
-        sc = m["smtp_check"]
-        if sc.get("connect"):
-            print("  SMTP: connect ok")
-            print("   EHLO response preview:", (sc.get("ehlo") or "").splitlines()[0] if sc.get("ehlo") else "n/a")
-            print("   STARTTLS available:", sc.get("starttls"))
-            if sc.get("tls_cert"):
-                cert = sc.get("tls_cert")
-                subj = cert.get('subject', ())
-                cn = None
-                for s in subj:
-                    for k, v in s:
-                        if k.lower() == 'commonname':
-                            cn = v
-                print("   TLS cert CN:", cn)
+            
+            if b"STARTTLS" in response.upper():
+                print(" YES")
+                print("   Your email is protected like online banking.")
+                self.has_encryption = True
+                return True
+            else:
+                print(" NO - PRIVACY RISK")
+                print("   Your emails are like postcards - anyone can read them.")
+                self.problems.append(
+                    "Emails are not encrypted. They could be intercepted and read."
+                )
+                self.solutions.append(
+                    "Enable email encryption. Tell your IT team: 'Enable STARTTLS on port 25.'"
+                )
+                return False
+        except:
+            print(" COULD NOT TEST")
+            print("   (This test may be blocked by your network)")
+            return False
+    
+    def calculate_risk_level(self):
+        """Determine business risk level."""
+        score = 0
+        if self.can_receive_email:
+            score += 25
+        if self.has_spam_protection:
+            score += 25
+        if self.has_authenticity_check:
+            score += 25
+        if self.has_encryption:
+            score += 25
+        
+        if score >= 75:
+            return "LOW RISK", score
+        elif score >= 50:
+            return "MODERATE RISK", score
         else:
-            print("  SMTP: connection failed:", sc.get("error"))
-    print("\nDKIM selectors checked (presence of public key in DNS):")
-    for sel, ok in out["dkim"].items():
-        print(f"  {sel}: {'FOUND' if ok else 'missing'}")
-    print("\nNotes:")
-    print(" - You cannot validate DKIM signature handling without sending a signed message and inspecting headers.")
-    print(" - If DMARC is missing, receivers may not trust your mail. Consider publishing a DMARC TXT at _dmarc.<domain> with v=DMARC1; p=none|quarantine|reject; pct=100")
-    print(" - If SPF exists, ensure it covers all sending IPs and includes for third-party senders.")
-    print(" - For MTA-STS, publish _mta-sts TXT plus policy at https://mta-sts.<domain>/.well-known/mta-sts.txt")
-    print("\nEnd of report.")
-    return out
+            return "HIGH RISK", score
+    
+    def generate_business_report(self):
+        """Create a business-friendly report."""
+        risk_level, score = self.calculate_risk_level()
+        
+        print("\n" + "="*50)
+        print("BUSINESS EMAIL HEALTH REPORT")
+        print("="*50)
+        
+        print(f"\nDomain tested: {self.domain}")
+        print(f"Date: {time.strftime('%B %d, %Y')}")
+        print(f"\nRISK LEVEL: {risk_level} ({score}/100)")
+        
+        # Business impact summary
+        print("\nWHAT THIS MEANS FOR YOUR BUSINESS:")
+        print("-"*35)
+        
+        if risk_level == "HIGH RISK":
+            print("""
+IMMEDIATE ACTION REQUIRED
+
+Your email configuration has serious problems that could:
+• Prevent you from receiving customer emails
+• Cause your emails to be blocked as spam
+• Allow criminals to impersonate your business
+• Expose confidential information
+
+You should fix these issues immediately to protect your
+business reputation and ensure reliable communication.
+            """)
+        elif risk_level == "MODERATE RISK":
+            print("""
+IMPROVEMENTS RECOMMENDED
+
+Your email works but has security gaps that could:
+• Reduce email delivery success
+• Make it easier for scammers to impersonate you
+• Cause some emails to go to spam folders
+
+These issues should be addressed soon to improve
+email reliability and security.
+            """)
+        else:
+            print("""
+GOOD CONFIGURATION
+
+Your email setup follows industry best practices.
+Continue to monitor your email configuration quarterly
+to ensure it remains secure and properly configured.
+            """)
+        
+        # Specific problems and solutions
+        if self.problems:
+            print("\nPROBLEMS FOUND:")
+            print("-"*15)
+            for i, problem in enumerate(self.problems, 1):
+                print(f"\n{i}. {problem}")
+            
+            print("\n\nWHAT YOUR IT TEAM NEEDS TO DO:")
+            print("-"*30)
+            for i, solution in enumerate(self.solutions, 1):
+                print(f"\n{i}. {solution}")
+        
+        # Next steps
+        print("\n\nNEXT STEPS:")
+        print("-"*11)
+        if risk_level == "HIGH RISK":
+            print("""
+1. Share this report with your IT team immediately
+2. If you don't have IT support, contact your email provider
+3. Request they fix the issues listed above
+4. Re-run this check after fixes are applied
+            """)
+        else:
+            print("""
+1. Save this report for your records
+2. Share with your IT team for awareness
+3. Schedule a quarterly check of your email configuration
+4. Monitor your email delivery rates for any issues
+            """)
+        
+        # Simple glossary at the end
+        if self.problems:
+            print("\n\nSIMPLE DEFINITIONS:")
+            print("-"*18)
+            print("""
+MX Records = Email delivery address (like a mailing address)
+SPF = List of who's allowed to send email for you
+DMARC = Rules for handling suspicious emails
+Encryption = Scrambling emails so only recipient can read them
+            """)
+    
+    def run_check(self, domain):
+        """Run all checks and generate report."""
+        self.domain = domain
+        
+        print("\n" + "="*50)
+        print("BUSINESS EMAIL HEALTH CHECK")
+        print(f"Checking: {domain}")
+        print("="*50)
+        
+        self.explain_why_this_matters()
+        
+        print("\nRUNNING CHECKS")
+        print("="*50)
+        
+        # Run all checks
+        self.check_if_email_works()
+        self.check_spam_protection()
+        self.check_authenticity()
+        self.check_encryption()
+        
+        # Generate report
+        self.generate_business_report()
+        
+        print("\n" + "="*50)
+        print("END OF REPORT")
+        print("="*50)
+
+
+def clean_domain_input(user_input):
+    """Clean up common input mistakes."""
+    domain = user_input.lower().strip()
+    
+    # Remove common prefixes
+    prefixes = ["http://", "https://", "www.", "mail.", "email."]
+    for prefix in prefixes:
+        if domain.startswith(prefix):
+            domain = domain[len(prefix):]
+    
+    # Remove everything after first slash
+    if "/" in domain:
+        domain = domain.split("/")[0]
+    
+    # Handle email addresses
+    if "@" in domain:
+        domain = domain.split("@")[-1]
+    
+    return domain
+
+
+def validate_domain_format(domain):
+    """Check if domain looks valid."""
+    # Must have at least one dot
+    if "." not in domain:
+        return False, "Missing extension (like .com or .org)"
+    
+    # Check length
+    if len(domain) > 253:
+        return False, "Too long to be a valid domain"
+    
+    # Check for spaces or invalid characters
+    if " " in domain:
+        return False, "Contains spaces"
+    
+    # Basic character check
+    allowed = "abcdefghijklmnopqrstuvwxyz0123456789.-"
+    if not all(c in allowed for c in domain):
+        return False, "Contains invalid characters"
+    
+    # Don't allow local addresses
+    blocked = ["localhost", "127.0.0.1", "0.0.0.0", "example.com", "test.com"]
+    if domain in blocked:
+        return False, "This is a test domain, not a real business domain"
+    
+    return True, "Valid"
+
+
+def main():
+    """Main entry point."""
+    
+    # Check if user provided a domain
+    if len(sys.argv) < 2:
+        print("""
+BUSINESS EMAIL HEALTH CHECK
+===========================
+
+This tool checks if your business email is properly configured.
+
+HOW TO USE:
+-----------
+Type: python check.py yourbusiness.com
+
+Replace 'yourbusiness.com' with your actual domain name.
+
+EXAMPLES:
+---------
+python check.py acme-corp.com
+python check.py mybusiness.org
+python check.py company.co.uk
+
+COMMON QUESTIONS:
+-----------------
+Q: What's my domain?
+A: It's the part after @ in your email address.
+   If your email is john@acme.com, your domain is acme.com
+
+Q: How long does this take?
+A: About 30 seconds
+
+Q: Is this safe?
+A: Yes, this only reads public information about your domain
+
+Q: Who should see the results?
+A: Share the report with your IT team or email provider
+
+Need help? Contact your IT support team.
+        """)
+        sys.exit(0)
+    
+    # Get and clean domain
+    user_input = sys.argv[1]
+    domain = clean_domain_input(user_input)
+    
+    # Validate domain
+    is_valid, message = validate_domain_format(domain)
+    
+    if not is_valid:
+        print(f"""
+ERROR: '{user_input}' doesn't look like a valid domain.
+
+Problem: {message}
+
+WHAT TO DO:
+-----------
+Enter just your domain name, like: mybusiness.com
+
+Don't include:
+• http:// or https://
+• www. at the beginning  
+• Your email address (just the part after @)
+• Any slashes or paths
+
+EXAMPLES OF CORRECT FORMAT:
+• acme.com ✓
+• mybusiness.org ✓  
+• company.co.uk ✓
+
+EXAMPLES OF INCORRECT FORMAT:
+• https://www.acme.com ✗ (remove https://www.)
+• john@acme.com ✗ (just use acme.com)
+• acme.com/contact ✗ (remove /contact)
+• acme ✗ (needs .com, .org, etc.)
+
+Please try again with just your domain name.
+        """)
+        sys.exit(1)
+    
+    # Show cleaned domain if different
+    if domain != user_input:
+        print(f"\nNote: Checking '{domain}' (cleaned from '{user_input}')")
+    
+    # Run the check
+    try:
+        checker = BusinessEmailChecker()
+        checker.run_check(domain)
+        
+    except KeyboardInterrupt:
+        print("\n\nCheck cancelled. You can run it again anytime.")
+        sys.exit(0)
+        
+    except Exception as e:
+        print(f"""
+TECHNICAL ERROR
+===============
+
+The check encountered an error:
+{str(e)}
+
+POSSIBLE CAUSES:
+• The domain might not exist
+• Your internet connection might be down
+• The domain's servers might be unreachable
+
+WHAT TO DO:
+1. Verify you spelled the domain correctly
+2. Check your internet connection
+3. Try again in a few minutes
+4. If the problem persists, contact your IT team
+
+You entered: {domain}
+        """)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Email health check for domain")
-    parser.add_argument("domain", help="domain to check (example.com)")
-    parser.add_argument("--dkim-selectors", help="comma separated DKIM selectors to check", default="")
-    args = parser.parse_args()
-    selectors = [s.strip() for s in args.dkim_selectors.split(",") if s.strip()] if args.dkim_selectors else []
-    main(args.domain, selectors)
+    main()
