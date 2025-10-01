@@ -137,8 +137,7 @@ def safe_dns_query(domain: str, record_type: str, timeout: int = DNS_TIMEOUT):
         resolver = dns.resolver.Resolver()
         resolver.lifetime = timeout
         resolver.timeout = timeout
-        # Use system resolvers only
-        resolver.nameservers = []
+        # Don't override nameservers - use system defaults
         
         return resolver.resolve(domain, record_type)
     except dns.exception.DNSException:
@@ -448,62 +447,78 @@ def security_score(out: Dict) -> Dict:
     score = 0
     max_score = 100
     issues = []
+    recommendations = []
     
-    # SPF (15 points)
+    # Core requirements (80 points total)
+    
+    # MX records (20 points) - Can receive email
+    if out.get("mx_hosts"):
+        score += 20
+    else:
+        issues.append("No MX records found - cannot receive email")
+    
+    # SPF (20 points) - Prevents spoofing
     if out.get("spf"):
-        score += 10
+        score += 15
         if "~all" in out["spf"] or "-all" in out["spf"]:
             score += 5
         else:
-            issues.append("SPF should end with -all or ~all")
+            recommendations.append("SPF should end with -all or ~all for better protection")
     else:
-        issues.append("No SPF record found")
+        issues.append("No SPF record found - emails may be marked as spam")
     
-    # DMARC (20 points)
+    # DMARC (20 points) - Email authentication
     if out.get("dmarc"):
         score += 10
-        if "p=reject" in out["dmarc"] or "p=quarantine" in out["dmarc"]:
+        if "p=reject" in out["dmarc"]:
             score += 10
+        elif "p=quarantine" in out["dmarc"]:
+            score += 8
         else:
             score += 5
-            issues.append("DMARC policy should be quarantine or reject")
+            recommendations.append("Consider strengthening DMARC policy to quarantine or reject")
     else:
-        issues.append("No DMARC record found")
+        issues.append("No DMARC record found - reduced email deliverability")
     
-    # MTA-STS (15 points)
-    if out.get("mta_sts_txt"):
-        score += 5
-    if out.get("mta_sts_policy"):
-        score += 10
-    else:
-        issues.append("No MTA-STS policy found")
-    
-    # TLS-RPT (10 points)
-    if out.get("tls_rpt"):
-        score += 10
-    else:
-        issues.append("No TLS-RPT record found")
-    
-    # STARTTLS (20 points)
+    # STARTTLS (20 points) - Encryption in transit
     starttls_ok = 0
-    for mx in out.get("mx_hosts", []):
-        if mx.get("smtp_check", {}).get("starttls"):
-            starttls_ok += 1
+    mx_count = len(out.get("mx_hosts", []))
     
-    if out.get("mx_hosts"):
-        starttls_ratio = starttls_ok / len(out["mx_hosts"])
+    if mx_count > 0:
+        for mx in out["mx_hosts"]:
+            if mx.get("smtp_check", {}).get("starttls"):
+                starttls_ok += 1
+        
+        starttls_ratio = starttls_ok / mx_count
         score += int(20 * starttls_ratio)
-        if starttls_ratio < 1:
-            issues.append(f"Only {starttls_ok}/{len(out['mx_hosts'])} MX hosts support STARTTLS")
+        
+        if starttls_ratio == 0:
+            issues.append("No MX hosts support STARTTLS - emails not encrypted")
+        elif starttls_ratio < 1:
+            issues.append(f"Only {starttls_ok}/{mx_count} MX hosts support STARTTLS")
     
-    # DKIM (10 points)
+    # Advanced features (20 points total - optional/bonus)
+    
+    # DKIM (5 points) - Optional but recommended
     dkim_found = sum(1 for v in out.get("dkim", {}).values() if v)
     if dkim_found > 0:
-        score += 10
+        score += 5
     else:
-        issues.append("No DKIM selectors found")
+        recommendations.append("Consider setting up DKIM for email signing")
     
-    # PTR records (10 points)
+    # MTA-STS (5 points) - Advanced feature
+    if out.get("mta_sts_policy"):
+        score += 5
+    else:
+        recommendations.append("Consider implementing MTA-STS for enforced TLS")
+    
+    # TLS-RPT (5 points) - Advanced feature
+    if out.get("tls_rpt"):
+        score += 5
+    else:
+        recommendations.append("Consider adding TLS-RPT for delivery diagnostics")
+    
+    # PTR records (5 points) - Good to have
     ptr_ok = 0
     ptr_total = 0
     for mx in out.get("mx_hosts", []):
@@ -514,35 +529,78 @@ def security_score(out: Dict) -> Dict:
     
     if ptr_total > 0:
         ptr_ratio = ptr_ok / ptr_total
-        score += int(10 * ptr_ratio)
-        if ptr_ratio < 1:
-            issues.append(f"Only {ptr_ok}/{ptr_total} IPs have valid PTR records")
+        score += int(5 * ptr_ratio)
+        if ptr_ratio < 0.5:
+            recommendations.append(f"Only {ptr_ok}/{ptr_total} IPs have valid PTR records")
+    
+    # Ensure score doesn't go below 0
+    score = max(0, score)
     
     return {
         "score": score,
         "max_score": max_score,
         "grade": get_grade(score),
-        "issues": issues
+        "issues": issues,
+        "recommendations": recommendations
     }
 
 def get_grade(score: int) -> str:
     """Convert score to grade."""
-    if score >= 90:
+    if score >= 85:
         return "A"
-    elif score >= 80:
-        return "B"
     elif score >= 70:
+        return "B"
+    elif score >= 55:
         return "C"
-    elif score >= 60:
+    elif score >= 40:
         return "D"
     else:
         return "F"
+
+def test_dns_connectivity() -> bool:
+    """Test DNS connectivity before running checks."""
+    print("Testing DNS connectivity...")
+    
+    test_domains = [
+        "google.com",
+        "cloudflare.com", 
+        "quad9.net"
+    ]
+    
+    for test_domain in test_domains:
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 3
+            resolver.lifetime = 3
+            answers = resolver.resolve(test_domain, "A")
+            if answers:
+                print(f"  ✓ DNS is working (resolved {test_domain})")
+                return True
+        except Exception:
+            continue
+    
+    print("  ✗ DNS connectivity issue detected")
+    print("\nDNS CONNECTIVITY ERROR")
+    print("=" * 40)
+    print("Unable to perform DNS queries. This could be due to:")
+    print("  • No internet connection")
+    print("  • DNS server is unreachable")  
+    print("  • Firewall blocking DNS (port 53)")
+    print("  • Corporate proxy or VPN issues")
+    print("\nPlease check your network connection and DNS settings.")
+    return False
 
 def main(domain: str, dkim_selectors: List[str], skip_smtp: bool = False):
     """Main function with security checks."""
     
     # Print security warning
     print(SECURITY_WARNING)
+    print()
+    
+    # Test DNS connectivity first
+    if not test_dns_connectivity():
+        sys.exit(1)
+    
     print()
     
     # Validate domain
@@ -672,11 +730,17 @@ def main(domain: str, dkim_selectors: List[str], skip_smtp: bool = False):
     else:
         print("  No DKIM selectors found")
     
-    # Security recommendations
+    # Critical issues
     if security["issues"]:
-        print("\nSecurity Recommendations:")
+        print("\n⚠️  Critical Issues (Must Fix):")
         for i, issue in enumerate(security["issues"], 1):
             print(f"  {i}. {issue}")
+    
+    # Recommendations
+    if security["recommendations"]:
+        print("\n💡 Recommendations (Nice to Have):")
+        for i, rec in enumerate(security["recommendations"], 1):
+            print(f"  {i}. {rec}")
     
     print("\nNotes:")
     print("  • DKIM signatures can only be fully validated by receiving and analyzing signed messages")

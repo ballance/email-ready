@@ -313,6 +313,49 @@ DMARC = Rules for handling suspicious emails
 Encryption = Scrambling emails so only recipient can read them
             """)
     
+    def test_dns_connectivity(self):
+        """Test DNS connectivity before running checks."""
+        print("\nTesting DNS connectivity...")
+        print("   Checking...", end="", flush=True)
+        
+        test_domains = ["google.com", "cloudflare.com", "quad9.net"]
+        
+        for test_domain in test_domains:
+            try:
+                resolver = dns.resolver.Resolver()
+                resolver.timeout = 3
+                answers = resolver.resolve(test_domain, "A")
+                if answers:
+                    print(" YES")
+                    print(f"   DNS is working properly")
+                    return True
+            except:
+                continue
+        
+        print(" NO - CRITICAL PROBLEM")
+        print("""
+   
+DNS CONNECTIVITY PROBLEM
+========================
+
+Your computer cannot perform DNS lookups. This could be because:
+
+• No internet connection
+• Your DNS server is down
+• Firewall is blocking DNS
+• VPN or proxy issues
+
+WHAT TO DO:
+-----------
+1. Check your internet connection
+2. Try restarting your router/modem
+3. Contact your IT department
+4. Check if you're connected to VPN
+
+This check cannot continue without DNS working.
+        """)
+        return False
+    
     def run_check(self, domain):
         """Run all checks and generate report."""
         self.domain = domain
@@ -321,6 +364,13 @@ Encryption = Scrambling emails so only recipient can read them
         print("BUSINESS EMAIL HEALTH CHECK")
         print(f"Checking: {domain}")
         print("="*50)
+        
+        # Test DNS connectivity first
+        if not self.test_dns_connectivity():
+            print("\n" + "="*50)
+            print("CHECK ABORTED - DNS NOT WORKING")
+            print("="*50)
+            return
         
         self.explain_why_this_matters()
         
