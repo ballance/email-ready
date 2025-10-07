@@ -28,7 +28,7 @@ import requests
 import re
 import time
 import sys
-import ipaddress
+from cidr_man import CIDR
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -93,18 +93,23 @@ def validate_domain(domain: str) -> bool:
     return True
 
 def validate_ip(ip: str) -> bool:
-    """Validate IP address and block private/reserved ranges."""
+    """Validate IP address and block private/reserved ranges using cidr_man."""
     try:
-        ip_obj = ipaddress.ip_address(ip)
-        
-        # Block private, loopback, link-local, multicast
-        if (ip_obj.is_private or ip_obj.is_loopback or 
-            ip_obj.is_link_local or ip_obj.is_multicast or
-            ip_obj.is_reserved):
-            return False
-        
-        return True
-    except ValueError:
+        addr = CIDR(ip)
+
+        # Ensure caller gave a single host address, not a network like "1.2.3.0/24"
+        is_host = "/" not in addr.compressed  # hosts render without a /prefix
+
+        # Block private, loopback, link-local, multicast, reserved
+        blocked = (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_reserved
+        )
+        return is_host and not blocked
+    except Exception:
         return False
 
 def rate_limit_check(domain: str) -> bool:
