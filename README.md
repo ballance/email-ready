@@ -16,7 +16,7 @@ For business owners, managers, and non-technical users who need to understand th
 - Clear explanations of problems and solutions
 - What to tell your IT team to fix issues
 
-### 🔒 check_secure.py - Technical Version  
+### 🔒 check_secure.py - Technical Version
 For IT professionals, system administrators, and security teams who need detailed technical analysis.
 
 **Features:**
@@ -66,6 +66,8 @@ python check_secure.py example.com --skip-smtp
 
 ## Installation
 
+### Local Installation
+
 ```bash
 # Clone repository
 git clone https://github.com/ballance/email-ready.git
@@ -73,6 +75,20 @@ cd email-ready
 
 # Install dependencies
 pip install -r requirements.txt
+```
+
+### Using Docker
+
+```bash
+# Clone repository
+git clone https://github.com/ballance/email-ready.git
+cd email-ready
+# Build Docker image
+docker build -t email-ready .
+# Run the business version
+docker run --rm email-ready python check.py example.com
+# Run the technical version
+docker run --rm email-ready python check_secure.py example.com
 ```
 
 ## Requirements
