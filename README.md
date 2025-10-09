@@ -43,7 +43,8 @@ Checking: example.com
 3. Will email providers trust your emails? PARTIALLY
 4. Is your email encrypted during delivery? YES
 
-RISK LEVEL: MODERATE RISK (75/100)
+RISK LEVEL: MODERATE RISK
+Health Score: 75 out of 100 points (75%)
 
 PROBLEMS FOUND:
 1. Missing email authentication. Your emails might go to spam folders.

@@ -232,7 +232,9 @@ Let's begin...
         
         print(f"\nDomain tested: {self.domain}")
         print(f"Date: {time.strftime('%B %d, %Y')}")
-        print(f"\nRISK LEVEL: {risk_level} ({score}/100)")
+        print(f"\nRISK LEVEL: {risk_level}")
+        percentage = int((score / 100) * 100)
+        print(f"Health Score: {score} out of 100 points ({percentage}%)")
         
         # Business impact summary
         print("\nWHAT THIS MEANS FOR YOUR BUSINESS:")
