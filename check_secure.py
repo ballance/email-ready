@@ -32,6 +32,7 @@ from cidr_man import CIDR
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 from datetime import datetime, timedelta
+from rate_limiter import create_rate_limiter
 
 # Security configuration
 MAX_DOMAIN_LENGTH = 253
@@ -46,11 +47,18 @@ SMTP_TIMEOUT = 5  # Reduced from 6
 HTTP_TIMEOUT = 3  # Reduced from 5
 MAX_HTTP_SIZE = 100 * 1024  # 100KB max for MTA-STS policy
 
-# Rate limiting
+# Rate limiting (now with persistence)
 dns_query_count = 0
 smtp_connection_count = 0
 last_query_time = defaultdict(float)
 MIN_QUERY_INTERVAL = 0.1  # 100ms between queries to same domain
+
+# SECURITY FIX: Initialize persistent rate limiter
+# This prevents bypassing rate limits by creating multiple instances
+persistent_limiter = create_rate_limiter({
+    "window_seconds": 3600,  # 1 hour window
+    "max_requests": MAX_DNS_QUERIES_PER_RUN * 2  # Allow 2x the per-run limit per hour
+})
 
 # Security warning
 SECURITY_WARNING = """
@@ -69,36 +77,55 @@ def validate_domain(domain: str) -> bool:
     """Validate domain name format and prevent injection attacks."""
     if not domain or len(domain) > MAX_DOMAIN_LENGTH:
         return False
-    
-    # Check for valid characters
-    if not re.match(r'^[a-zA-Z0-9.-]+$', domain):
+
+    # SECURITY FIX: Replace regex with character-by-character validation to prevent ReDoS
+    # Check for valid characters without regex to avoid catastrophic backtracking
+    allowed_chars = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-')
+    if not all(c in allowed_chars for c in domain):
         return False
-    
+
+    # Additional validation: no consecutive dots, no leading/trailing dots
+    if '..' in domain or domain.startswith('.') or domain.endswith('.'):
+        return False
+
     # Check each label
     labels = domain.split('.')
     if len(labels) < 2:  # At least domain.tld
         return False
-    
+
     for label in labels:
         if not label or len(label) > MAX_LABEL_LENGTH:
             return False
         if label.startswith('-') or label.endswith('-'):
             return False
-    
+        # Labels must start with alphanumeric
+        if not label[0].isalnum():
+            return False
+
     # Prevent localhost and private domains
     blocked_domains = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
     if domain.lower() in blocked_domains:
         return False
-    
+
     return True
 
 def validate_ip(ip: str) -> bool:
-    """Validate IP address and block private/reserved ranges using cidr_man."""
+    """Validate IP address and block private/reserved ranges using cidr_man.
+
+    Security fix: Explicitly blocks unspecified addresses (0.0.0.0, ::)
+    which cidr_man doesn't properly flag as reserved.
+    """
     try:
         addr = CIDR(ip)
 
-        # Ensure caller gave a single host address, not a network like "1.2.3.0/24"
-        is_host = "/" not in addr.compressed  # hosts render without a /prefix
+        # Ensure caller gave a single host address, not a network
+        if "/" in str(ip):
+            return False
+
+        # SECURITY FIX: Explicitly block unspecified addresses
+        # cidr_man doesn't properly flag these as reserved
+        if addr.compressed in ('0.0.0.0', '::'):
+            return False
 
         # Block private, loopback, link-local, multicast, reserved
         blocked = (
@@ -108,7 +135,7 @@ def validate_ip(ip: str) -> bool:
             or addr.is_multicast
             or addr.is_reserved
         )
-        return is_host and not blocked
+        return not blocked
     except Exception:
         return False
 
@@ -128,14 +155,20 @@ def rate_limit_check(domain: str) -> bool:
 def safe_dns_query(domain: str, record_type: str, timeout: int = DNS_TIMEOUT):
     """Perform DNS query with security checks."""
     global dns_query_count
-    
+
+    # SECURITY FIX: Check persistent rate limit first
+    # This prevents bypassing limits by restarting the process
+    allowed, message = persistent_limiter.check_rate_limit(domain, "dns_query")
+    if not allowed:
+        raise Exception(f"Rate limit exceeded: {message}")
+
     if dns_query_count >= MAX_DNS_QUERIES_PER_RUN:
-        raise Exception("DNS query limit exceeded")
-    
+        raise Exception("DNS query limit exceeded for this session")
+
     if not validate_domain(domain):
         raise ValueError("Invalid domain format")
-    
-    rate_limit_check(domain)
+
+    rate_limit_check(domain)  # Keep per-session rate limiting too
     dns_query_count += 1
     
     try:
@@ -322,9 +355,26 @@ def smtp_starttls_check(mx_host: str, timeout: int = SMTP_TIMEOUT) -> Dict:
         if not ips:
             result["error"] = "No valid IPs for MX host"
             return result
-        
+
         ip = ips[0]
-        
+
+        # SECURITY FIX: Re-validate IP to prevent DNS rebinding
+        # This prevents TOCTOU attacks where DNS changes between resolution and use
+        if not validate_ip(ip):
+            result["error"] = "IP validation failed after resolution (DNS rebinding protection)"
+            return result
+
+        # Double-check the IP hasn't changed (resolve again and verify)
+        try:
+            fresh_ips = resolve_host_ips(mx_host)
+            if ip not in fresh_ips:
+                result["error"] = "DNS changed during resolution (possible DNS rebinding attack)"
+                return result
+        except:
+            # If we can't re-resolve, don't proceed
+            result["error"] = "Unable to verify DNS consistency"
+            return result
+
         # Create socket with timeout
         sock = socket.socket(socket.AF_INET if ':' not in ip else socket.AF_INET6)
         sock.settimeout(timeout)
@@ -358,6 +408,13 @@ def smtp_starttls_check(mx_host: str, timeout: int = SMTP_TIMEOUT) -> Dict:
             context = ssl.create_default_context()
             context.check_hostname = True
             context.verify_mode = ssl.CERT_REQUIRED
+
+            # SECURITY FIX: Enforce minimum TLS 1.2
+            # Prevent downgrade attacks by requiring TLS 1.2 or higher
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+            # Disable weak ciphers and prefer secure ones
+            context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS')
             
             try:
                 tls = context.wrap_socket(sock, server_hostname=mx_host)

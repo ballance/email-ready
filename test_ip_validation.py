@@ -92,12 +92,18 @@ def validate_ip_ipaddress(ip: str) -> bool:
 
 
 def validate_ip_cidr_man(ip: str) -> bool:
-    """New implementation using cidr_man."""
+    """New implementation using cidr_man - WITH SECURITY FIX."""
     try:
         addr = CIDR(ip)
 
-        # Ensure caller gave a single host address, not a network like "1.2.3.0/24"
-        is_host = "/" not in addr.compressed  # hosts render without a /prefix
+        # Ensure caller gave a single host address, not a network
+        if "/" in str(ip):
+            return False
+
+        # SECURITY FIX: Explicitly block unspecified addresses
+        # cidr_man doesn't properly flag these as reserved
+        if addr.compressed in ('0.0.0.0', '::'):
+            return False
 
         # Block private, loopback, link-local, multicast, reserved
         blocked = (
@@ -107,7 +113,7 @@ def validate_ip_cidr_man(ip: str) -> bool:
             or addr.is_multicast
             or addr.is_reserved
         )
-        return is_host and not blocked
+        return not blocked
     except Exception:
         return False
 

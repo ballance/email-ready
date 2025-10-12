@@ -87,9 +87,19 @@ class BlacklistChecker:
         self.last_check_time = defaultdict(float)
 
     def _validate_ip(self, ip: str) -> bool:
-        """Validate IP address format and block private ranges."""
+        """Validate IP address format and block dangerous ranges.
+
+        Security fix: Explicitly blocks unspecified addresses (0.0.0.0, ::)
+        which cidr_man doesn't properly flag as reserved.
+        """
         try:
             addr = CIDR(ip)
+
+            # SECURITY FIX: Explicitly block unspecified addresses
+            # cidr_man doesn't properly flag these as reserved
+            if addr.compressed in ('0.0.0.0', '::'):
+                return False
+
             # Block private, loopback, link-local, multicast, reserved
             if (addr.is_private or addr.is_loopback or
                 addr.is_link_local or addr.is_multicast or
