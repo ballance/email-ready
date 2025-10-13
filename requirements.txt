@@ -1,7 +1,21 @@
-certifi==2025.10.5
+# Email-Ready Dependencies
+# Last Security Review: October 2025
+
+# Core dependencies
+dnspython==2.8.0        # DNS resolution
+requests==2.32.5        # HTTP client for MTA-STS
+certifi==2025.10.5      # Certificate validation
 charset-normalizer==3.4.3
-CIDR-Man==1.5.4
-dnspython==2.8.0
 idna==3.10
-requests==2.32.5
 urllib3==2.5.0
+
+# IP address handling
+# NOTE: CIDR-Man has security issues with unspecified addresses (0.0.0.0, ::)
+# We've patched these in our code, but consider migrating to ip_validator.py
+# which uses the standard ipaddress library instead
+CIDR-Man==1.5.4  # DEPRECATED - See ip_validator.py for migration
+
+# Optional: For development and testing
+# pytest==8.3.3
+# black==24.8.0
+# mypy==1.11.2
